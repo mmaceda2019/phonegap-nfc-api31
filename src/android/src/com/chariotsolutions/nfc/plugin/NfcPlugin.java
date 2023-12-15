@@ -44,6 +44,7 @@ public class NfcPlugin extends CordovaPlugin implements NfcAdapter.OnNdefPushCom
     private static final String REGISTER_DEFAULT_TAG = "registerTag";
     private static final String REMOVE_DEFAULT_TAG = "removeTag";
     private static final String WRITE_TAG = "writeTag";
+    private static final String WRITE_TAG_AND_MAKE_READ_ONLY = "writeAndMakeReadOnly";
     private static final String MAKE_READ_ONLY = "makeReadOnly";
     private static final String ERASE_TAG = "eraseTag";
     private static final String SHARE_TAG = "shareTag";
@@ -148,6 +149,9 @@ public class NfcPlugin extends CordovaPlugin implements NfcAdapter.OnNdefPushCom
 
         } else if (action.equalsIgnoreCase(WRITE_TAG)) {
             writeTag(data, callbackContext);
+
+        } else if (action.equalsIgnoreCase(WRITE_TAG_AND_MAKE_READ_ONLY)) {
+            writeAndMakeReadOnly(data, callbackContext);
 
         } else if (action.equalsIgnoreCase(MAKE_READ_ONLY)) {
             makeReadOnly(callbackContext);
@@ -344,6 +348,59 @@ public class NfcPlugin extends CordovaPlugin implements NfcAdapter.OnNdefPushCom
         writeNdefMessage(new NdefMessage(records), tag, callbackContext);
     }
 
+    private void writeAndMakeReadOnly(JSONArray data, CallbackContext callbackContext) throws JSONException {
+        if (getIntent() == null) {  // TODO remove this and handle LostTag
+            callbackContext.error("Failed to write tag, received null intent");
+        }
+
+        Tag tag = savedIntent.getParcelableExtra(NfcAdapter.EXTRA_TAG);
+        NdefRecord[] records = Util.jsonToNdefRecords(data.getString(0));
+        writeNdefMessageAndMakeReadOnly(new NdefMessage(records), tag, callbackContext);
+    }
+    private void writeNdefMessageAndMakeReadOnly(final NdefMessage message, final Tag tag, final CallbackContext callbackContext) {
+        cordova.getThreadPool().execute(() -> {
+            try {
+                boolean success = false;
+                Ndef ndef = Ndef.get(tag);
+                if (ndef != null) {
+                    ndef.connect();
+
+                    if (ndef.isWritable()) {
+                        int size = message.toByteArray().length;
+                        if (ndef.getMaxSize() < size) {
+                            callbackContext.error("Tag capacity is " + ndef.getMaxSize() +
+                                    " bytes, message is " + size + " bytes.");
+                        } else {
+                            ndef.writeNdefMessage(message);
+                            if (ndef.canMakeReadOnly()) {
+                                success = ndef.makeReadOnly();
+                            }
+                            callbackContext.success();
+                        }
+                    } else {
+                        callbackContext.error("Tag is read only");
+                    }
+                    ndef.close();
+                } else {
+                    NdefFormatable formatable = NdefFormatable.get(tag);
+                    if (formatable != null) {
+                        formatable.connect();
+                        formatable.formatReadOnly(message);
+                        callbackContext.success();
+                        formatable.close();
+                    } else {
+                        callbackContext.error("Tag doesn't support NDEF");
+                    }
+                }
+            } catch (FormatException e) {
+                callbackContext.error(e.getMessage());
+            } catch (TagLostException e) {
+                callbackContext.error(e.getMessage());
+            } catch (IOException e) {
+                callbackContext.error(e.getMessage());
+            }
+        });
+    }
     private void writeNdefMessage(final NdefMessage message, final Tag tag, final CallbackContext callbackContext) {
         cordova.getThreadPool().execute(() -> {
             try {
@@ -406,7 +463,6 @@ public class NfcPlugin extends CordovaPlugin implements NfcAdapter.OnNdefPushCom
 
             try {
                 if (ndef != null) {
-
                     ndef.connect();
 
                     if (!ndef.isWritable()) {
